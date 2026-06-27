@@ -1,0 +1,26 @@
+Payment Service (Go)
+POST /payments
+Headers:
+  Idempotency-Key: <uuid>
+
+Request:
+{
+  "invoice_id": "uuid",
+  "amount": 1000,
+  "currency": "USD"
+}
+
+Response:
+{
+  "payment_id": "uuid",
+  "status": "success"
+}
+
+Subscription Service (Java)
+POST /subscriptions
+PATCH /subscriptions/{id}/upgrade
+POST /subscriptions/{id}/cancel
+
+Billing Service (Python)
+POST /invoices/generate
+GET /invoices/{id}
