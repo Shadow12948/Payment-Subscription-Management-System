@@ -1,0 +1,101 @@
+func HandleWebhook(w http.ResponseWriter, r *http.Request, db *sql.DB) {
+    var event struct {
+        ID   string `json:"id"`
+        Type string `json:"type"`
+    }
+
+    json.NewDecoder(r.Body).Decode(&event)
+
+    _, err := db.Exec("INSERT INTO webhook_events(id, type, processed) VALUES($1,$2,false)", event.ID, event.Type)
+    if err != nil {
+        // already processed
+        w.WriteHeader(http.StatusOK)
+        return
+    }
+
+    switch event.Type {
+    case "payment.success":
+        // update invoice
+    }
+
+    db.Exec("UPDATE webhook_events SET processed=true WHERE id=$1", event.ID)
+
+    w.WriteHeader(http.StatusOK)
+}
+
+Example:
+
+Before:
+
+invoice	status
+inv_1	pending
+
+After payment success:
+
+Database:
+
+Before:
+
+id	processed
+evt_123	false
+
+After:
+
+id	processed
+evt_123	true
+
+Database output
+
+After processing:
+
+webhook_events
+id	type	processed
+evt_100	payment.success	true
+invoice table
+
+Before:
+
+invoice	status
+inv001	pending
+
+After:
+
+invoice	status
+
+API Output
+
+Response:
+
+HTTP/1.1 200 OK
+
+No JSON body is returned.
+
+Complete flow
+Payment Service
+        |
+        | webhook
+        v
+HandleWebhook()
+        |
+        v
+Read event JSON
+        |
+        v
+Save event ID
+        |
+        v
+Check duplicate
+        |
+        v
+Process payment.success
+        |
+        v
+Update invoice
+        |
+        v
+Mark processed=true
+        |
+        v
+Return 200 OK
+inv001	paidinvoice	status
+inv_1	paid
