@@ -1,0 +1,34 @@
+Go — Payment Service
+payment-service/
+├── cmd/main.go
+├── internal/
+│   ├── handler/payment_handler.go
+│   ├── service/payment_service.go
+│   ├── repo/payment_repo.go
+│   ├── middleware/idempotency.go
+│   └── db/db.go
+├── go.mod
+├── Dockerfile
+
+Java — Subscription Service
+subscription-service/
+├── src/main/java/com/app/
+│   ├── controller/
+│   ├── service/
+│   ├── repository/
+│   ├── model/
+│   └── SubscriptionApplication.java
+├── pom.xml
+├── Dockerfile
+
+Python — Billing Service
+billing-service/
+├── app/
+│   ├── main.py
+│   ├── services/invoice.py
+│   ├── services/tax.py
+│   ├── models.py
+│   └── db.py
+├── requirements.txt
+├── Dockerfile
+
