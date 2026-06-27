@@ -35,3 +35,49 @@ Amount  = 100000 cents
 Tax     = 18000 cents
 --------------------
 Total   = 118000 cents
+
+from datetime import datetime, timedelta
+from uuid import uuid4
+from .tax import calculate_tax
+
+def generate_invoice(user_id, subscription_id, amount_cents, currency, country):
+    tax = calculate_tax(amount_cents, country)
+    total = amount_cents + tax
+
+    invoice = {
+        "id": str(uuid4()),
+        "user_id": user_id,
+        "subscription_id": subscription_id,
+        "amount_cents": total,
+        "currency": currency,
+        "tax_cents": tax,
+        "status": "pending",
+        "due_date": datetime.utcnow() + timedelta(days=7)
+    }
+
+    return invoice
+Example execution
+
+Calling:
+
+generate_invoice(
+    "user123",
+    "sub456",
+    10000,
+    "INR",
+    "IN"
+)
+Output
+
+Example returned object:
+
+{
+    "id": "7c4a7b7e-5c3e-4f7c-9a5f-2b8e9a7f1234",
+    "user_id": "user123",
+    "subscription_id": "sub456",
+    "amount_cents": 11800,
+    "currency": "INR",
+    "tax_cents": 1800,
+    "status": "pending",
+    "due_date": "2026-07-04 10:11:38"
+}
