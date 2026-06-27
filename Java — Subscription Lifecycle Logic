@@ -1,0 +1,59 @@
+@Service
+public class SubscriptionService {
+
+    @Autowired
+    private SubscriptionRepository repo;
+
+    @Autowired
+    private PlanRepository planRepo;
+
+    @Transactional
+    public Subscription upgrade(UUID subscriptionId, UUID newPlanId) {
+        Subscription sub = repo.findById(subscriptionId)
+                .orElseThrow();
+
+        Plan newPlan = planRepo.findById(newPlanId)
+                .orElseThrow();
+
+        long remainingMillis = sub.getCurrentPeriodEnd().getTime() - System.currentTimeMillis();
+
+        double ratio = (double) remainingMillis /
+                (sub.getCurrentPeriodEnd().getTime() - sub.getCurrentPeriodStart().getTime());
+
+        long credit = (long)(sub.getPlan().getPriceCents() * ratio);
+        long newCost = newPlan.getPriceCents() - credit;
+
+        sub.setPlan(newPlan);
+        repo.save(sub);
+
+        // Emit event → billing service
+        return sub;
+    }
+
+    @Transactional
+    public void cancel(UUID subscriptionId) {
+        Subscription sub = repo.findById(subscriptionId)
+                .orElseThrow();
+
+        sub.setCancelAtPeriodEnd(true);
+        repo.save(sub);
+    }
+} 
+
+User clicks Upgrade
+        |
+        v
+SubscriptionService
+        |
+        v
+Find old plan
+        |
+Find new plan
+        |
+Calculate credit
+        |
+Update subscription
+        |
+Save database
+        |
+Return updated subscription
