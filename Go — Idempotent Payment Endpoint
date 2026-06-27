@@ -1,0 +1,62 @@
+package middleware
+
+import (
+    "database/sql"
+    "encoding/json"
+    "net/http"
+)
+
+func Idempotency(db *sql.DB, next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        key := r.Header.Get("Idempotency-Key")
+        if key == "" {
+            http.Error(w, "Missing Idempotency-Key", http.StatusBadRequest)
+            return
+        }
+
+        var response []byte
+        err := db.QueryRow("SELECT response FROM idempotency_keys WHERE key=$1", key).Scan(&response)
+
+        if err == nil {
+            w.Header().Set("Content-Type", "application/json")
+            w.Write(response)
+            return
+        }
+
+        rw := &responseWriter{ResponseWriter: w}
+        next.ServeHTTP(rw, r)
+
+        respBytes, _ := json.Marshal(rw.body)
+        _, _ = db.Exec("INSERT INTO idempotency_keys(key, response) VALUES($1, $2)", key, respBytes)
+    })
+}
+
+type responseWriter struct {
+    http.ResponseWriter
+    body interface{}
+}
+
+func (rw *responseWriter) Write(b []byte) (int, error) {
+    json.Unmarshal(b, &rw.body)
+    return rw.ResponseWriter.Write(b)
+}
+Output
+Client
+ |
+ | Idempotency-Key: abc123
+ |
+ v
+Middleware
+ |
+ | Database: not found
+ |
+ v
+Handler executes
+ |
+ v
+Response:
+{
+ "status":"success"
+}
+
+Saved in DB
