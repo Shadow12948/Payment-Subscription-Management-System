@@ -1,0 +1,37 @@
+def calculate_tax(amount_cents: int, country: str) -> int:
+    tax_rates = {
+        "US": 0.07,
+        "DE": 0.19,
+        "IN": 0.18
+    }
+    rate = tax_rates.get(country, 0.0)
+    return int(amount_cents * rate)
+
+Real billing example
+
+Amount:
+
+₹1000
+
+Stored as cents:
+
+100000 cents
+
+India GST:
+
+18%
+
+Function:
+
+calculate_tax(100000,"IN")
+
+Output:
+
+18000 cents
+
+Final bill:
+
+Amount  = 100000 cents
+Tax     = 18000 cents
+--------------------
+Total   = 118000 cents
