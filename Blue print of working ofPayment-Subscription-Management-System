@@ -1,0 +1,18 @@
+1. High-Level Architecture
+| Service                  | Language         | Responsibility                                     |
+| ------------------------ | ---------------- | -------------------------------------------------- |
+| **Payment Service**      | Go               | Payment processing, idempotency, external gateways |
+| **Subscription Service** | Java             | Plans, lifecycle, upgrades/downgrades              |
+| **Billing Service**      | Python           | Invoicing, proration, tax, currency                |
+| **API Gateway**          | (optional)       | Routing, auth                                      |
+| **Message Broker**       | (Kafka/RabbitMQ) | Async communication                                |
+| **PostgreSQL**           | DB               | Shared persistence (or per-service schema)         |
+
+2.Data Flow
+Client → API Gateway
+    → Subscription Service (create/update plan)
+        → emits event: subscription.updated
+            → Billing Service (generate invoice)
+                → Payment Service (charge)
+                    → emits payment.success / failure
+                        → Billing updates invoice
