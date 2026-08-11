@@ -16,3 +16,185 @@ Client → API Gateway
                 → Payment Service (charge)
                     → emits payment.success / failure
                         → Billing updates invoice
+Python Billing Service — Complete Structure Explanation
+bash
+billing-service/
+├── app/
+│   ├── main.py                 # Application entry point
+│   ├── services/
+│   │   ├── invoice.py          # Invoice generation logic
+│   │   └── tax.py              # Tax calculation logic
+│   ├── models.py               # Data models / database schemas
+│   └── db.py                   # Database connection setup
+├── requirements.txt            # Python dependencies
+└── Dockerfile                  # Containerization setup
+1. app/main.py — Application Entry Point
+This is the core of the service — where everything starts.
+
+python
+# Typical contents:
+from fastapi import FastAPI          # or Flask
+from app.services import invoice, tax
+from app.db import get_db
+
+app = FastAPI()
+
+@app.post("/api/billings")
+def create_billing(...):
+    # 1. Receive billing request
+    # 2. Call tax service to compute taxes
+    # 3. Call invoice service to generate invoice
+    # 4. Persist in database
+    # 5. Return response
+Responsibilities:
+
+Initializes the web framework (FastAPI/Flask)
+Starts the HTTP server on a port (e.g., 8000)
+Defines API routes (the request/response endpoints)
+Orchestrates the flow: request → tax → invoice → DB → response
+Registers middleware (auth, logging, error handling)
+2. app/services/invoice.py — Invoice Generation
+Handles the creation of billing documents after pricing is determined.
+
+python
+# Typical functions:
+def generate_invoice(customer, items, tax_breakdown):
+    # 1. Sum up line-item subtotals
+    # 2. Apply tax from tax.py
+    # 3. Compute total = subtotal + tax
+    # 4. Format invoice (number, date, due date)
+    # 5. Return invoice object
+Responsibilities:
+
+Creates invoice numbers (usually sequential or UUID-based)
+Aggregates line items and totals
+Stores invoice status (DRAFT, PAID, OVERDUE, VOID)
+Formats amounts (rounding to 2 decimal places)
+Manages the invoice lifecycle
+3. app/services/tax.py — Tax Calculation
+The module you asked about earlier — here's how it fits:
+
+python
+# Typical contents:
+TAX_RATES = {
+    "US": {"CA": 0.0825, "NY": 0.04, ...},
+    "GB": {"default": 0.20},   # VAT
+    "DE": {"default": 0.19},   # VAT
+    "IN": {"default": 0.18},   # GST
+}
+
+def get_tax_rate(country, region):
+    # Lookup country → region → rate
+
+def calculate_tax(amount, country, region):
+    rate = get_tax_rate(country, region)
+    tax = round(amount * rate, 2)
+    return tax, rate
+
+def apply_exemption(customer, amount):
+    # B2B exemptions, nonprofit, etc.
+Responsibilities:
+
+Maintains tax rate lookup tables (country/state-specific)
+Calculates tax on amounts using the applicable rate
+Handles exemptions (tax-exempt customers/organizations)
+Returns both the rate and computed tax for invoice display
+Flow: main.py → calls tax.calculate_tax() → passes result to invoice.generate_invoice()
+
+4. app/models.py — Data Models
+Defines the database entities (likely using SQLAlchemy or Pydantic):
+
+python
+# Typical models:
+class Customer(Base):
+    id, name, email, country, tax_exempt
+
+class Invoice(Base):
+    id, customer_id, items, status, created_at, total
+
+class InvoiceItem(Base):
+    invoice_id, description, amount, tax_rate, tax_amount
+Responsibilities:
+
+Defines tables (Customer, Invoice, InvoiceItem, etc.)
+Captures relationships (one customer → many invoices)
+Stores the data structure for persistency
+Validates data types via Pydantic models (if FastAPI)
+5. app/db.py — Database Connection
+Manages the persistence layer:
+
+python
+# Typical contents:
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+engine = create_engine(DATABASE_URL)      # e.g., postgres://...
+SessionLocal = sessionmaker(bind=engine)
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+Responsibilities:
+
+Sets up connection to the database (PostgreSQL/MySQL/SQLite)
+Creates the ORM engine and session factory
+Provides dependency injection for database sessions
+Possibly includes connection pooling and migration setup
+6. requirements.txt — Dependencies
+Lists all Python packages needed:
+
+ini
+fastapi==0.104.0
+uvicorn==0.24.0
+sqlalchemy==2.0.0
+pydantic==2.0.0
+psycopg2-binary==2.9.0
+7. Dockerfile — Containerization
+dockerfile
+FROM python:3.11-slim        # Base image
+
+WORKDIR /app                  # Working directory
+
+COPY requirements.txt .       # Copy deps first (caching layer)
+RUN pip install -r requirements.txt
+
+COPY app/ ./app               # Copy application code
+
+EXPOSE 8000                   # Expose port
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+End-to-End Flow Diagram
+scss
+        ┌────────────────────────────────────┐
+        │          main.py (API)             │
+        │   POST /api/billings               │
+        └──────────┬─────────────────────────┘
+                   │
+        ┌──────────▼──────────┐
+        │    services/tax.py   │  ← compute tax amount
+        │  calculate_tax()     │     based on country/region
+        └──────────┬──────────┘
+                   │ (tax amount, rate)
+        ┌──────────▼──────────┐
+        │ services/invoice.py  │  ← build invoice document
+        │ generate_invoice()   │     subtotal + tax = total
+        └──────────┬──────────┘
+                   │
+        ┌──────────▼──────────┐
+        │      models.py       │  ← persist via ORM
+        └──────────┬──────────┘
+                   │
+        ┌──────────▼──────────┐
+        │       db.py          │  ← database connection
+        └─────────────────────┘
+Architecture Highlights
+Layer	File	Role
+Entry/Controller	main.py	Receives HTTP requests, orchestrates flow
+Business Logic	services/	Tax + invoice computation
+Domain Models	models.py	Data structures and validation
+Persistence	db.py	Database connectivity
+Config	requirements.txt + Dockerfile	Packaging & deployment
+This follows a clean layered architecture — separation of concerns where each file has a single, focused responsibility.
