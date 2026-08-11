@@ -107,4 +107,103 @@ subscriptions
 usage_records
 users
 webhook_events
+Database Schema — Complete Breakdown
+The 8 Tables & How They Connect
+bash
+                    ┌──────────────┐
+                    │    users     │
+                    └──────┬───────┘
+                           │
+              ┌────────────┴────────────┐
+              │                         │
+     ┌────────▼────────┐        ┌───────▼────────┐
+     │   plans         │        │  subscriptions │
+     └────────┬────────┘        └───────┬────────┘
+              │                         │
+              │                 ┌───────┴────────┐
+              │                 │ usage_records  │
+              │                 └────────────────┘
+              │                         │
+     ┌────────▼────────┐        ┌───────▼────────┐
+     │   invoices      │───────▶│    payments    │
+     └────────┬────────┘        └───────┬────────┘
+              │                         │
+              │                 ┌───────▼────────┐
+              │                 │idempotency_keys│
+              │                 └────────────────┘
+     ┌────────┴────────┐
+     │ webhook_events  │
+     └─────────────────┘
+Table-by-Table Explanation
+1. users — Customers
+sql
+id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+email TEXT UNIQUE NOT NULL,
+created_at TIMESTAMP DEFAULT now()
+Field	Purpose
+id	Auto-generated UUID (no need to manually assign)
+email	Unique — no duplicate customer accounts
+created_at	Tracking when the customer signed up
+Used by: Subscription (Java) to create accounts, marks the root entity of the system.
 
+2. plans — Product Catalog (Pricing)
+sql
+id UUID PRIMARY KEY,
+name TEXT NOT NULL,              -- e.g., "Basic", "Pro", "Enterprise"
+price_cents BIGINT NOT NULL,     -- ints, never floats! (avoids rounding errors)
+currency TEXT DEFAULT 'USD',
+interval TEXT CHECK (interval IN ('monthly','yearly'))
+Field	Significance
+price_cents	Money stored as cents (integer) — crucial for financial accuracy
+interval	CHECK constraint enforces only valid billing cycles
+Used by: Subscription (Java) references plans for plan selection/upgrades.
+
+Why cents? Floats cause precision issues (0.1 + 0.2 = 0.30000000000000004). Storing $10 as 1000 cents avoids this entirely.
+
+3. subscriptions — The Lifecycle Table
+sql
+id UUID PRIMARY KEY,
+user_id UUID REFERENCES users(id),
+plan_id UUID REFERENCES plans(id),
+status TEXT DEFAULT 'active',
+current_period_start TIMESTAMP,
+current_period_end TIMESTAMP,
+cancel_at_period_end BOOLEAN DEFAULT false,
+created_at TIMESTAMP DEFAULT now()
+Field	Purpose
+user_id → users	Who owns this subscription (FK)
+plan_id → plans	Which plan they're on (FK)
+status	active (or cancelled/expired — though not constrained here)
+current_period_start/end	Billing cycle boundaries (e.g., July 1 → Aug 1)
+cancel_at_period_end	Graceful cancellation — keep access until end of cycle, then cancel
+Most important table — it's managed by the Subscription Service (Java):
+
+POST /subscriptions → creates a row with status='active'
+PATCH .../upgrade → changes plan_id
+POST .../{id}/cancel → sets cancel_at_period_end=true
+4. invoices — Bills Produced
+sql
+id UUID PRIMARY KEY,
+user_id UUID REFERENCES users(id),
+subscription_id UUID REFERENCES subscriptions(id),
+amount_cents BIGINT NOT NULL,
+currency TEXT DEFAULT 'USD',
+status TEXT DEFAULT 'pending',
+due_date TIMESTAMP,
+created_at TIMESTAMP DEFAULT now()
+Field	Purpose
+user_id	Who is billed
+subscription_id	Which subscription generated this bill
+amount_cents	The total due
+status	pending → (later)paid/failed (constrained by the Billing Service)
+due_date	Payment deadline
+Used by: Billing Service (Python) creates these (POST /invoices/generate), which the Payment Service (Go) settles.
+
+5. payments — Money Movement
+sql
+id UUID PRIMARY KEY,  
+invoice_id UUID REFERENCES invoices(id),  
+amount_cents BIGINT NOT NULL,  
+currency TEXT DEFAULT 'USD',  
+status TEXT DEFAULT 'pending',  
+idemp
