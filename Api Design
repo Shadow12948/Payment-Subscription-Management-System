@@ -24,3 +24,206 @@ POST /subscriptions/{id}/cancel
 Billing Service (Python)
 POST /invoices/generate
 GET /invoices/{id}
+Complete Payment Microservices Architecture
+scss
+┌──────────────────┐     ┌──────────────────┐     ┌──────────────────┐
+│  Payment Service  │     │ Subscription      │     │  Billing Service  │
+│     (Go)          │     │ Service (Java)    │     │    (Python)       │
+│  - Processes      │     │ - Manages plans   │     │ - Generates       │
+│    payments       │     │ - Lifecycle       │     │   invoices        │
+└──────────────────┘     └──────────────────┘     └──────────────────┘
+Service 1: Payment Service (Go)
+POST /payments — Charge a Customer
+Purpose: Process the actual financial transaction (money movement).
+
+Component	Details
+Headers	Idempotency-Key: <uuid> — ensures the same request is never processed twice
+Request body	invoice_id (which invoice to pay), amount (in cents), currency
+Response	Mocked payment_id and status: "success" (no real gateway is shown)
+Algorithm (how the payment is processed):
+
+vbnet
+Algorithm: ProcessPayment(invoice_id, amount, currency, idempotency_key)
+
+1. CHECK idempotency-key in database
+   ├── If key ALREADY EXISTS → return the SAME previous result (no double charge)
+   └── If key is NEW → continue
+
+2. VALIDATE the request
+   ├── invoice_id exists
+   ├── amount > 0
+   └── currency is supported
+
+3. PROCESS payment (mock gateway call)
+   ├── Generate unique payment_id (UUID)
+   └── Mark status = "success"
+
+4. STORE the transaction (payment + idempotency_key) in DB
+
+5. RETURN { payment_id, status }
+Why idempotency matters: If the client retries (network timeout), the same payment won't be charged twice. This is critical for financial systems.
+
+Service 2: Subscription Service (Java)
+This service manages the subscription lifecycle. It regulates when customers are billed and at what rate.
+
+POST /subscriptions — Create a Subscription
+Algorithm:
+
+sql
+Algorithm: CreateSubscription(user_id, plan, payment_method)
+
+1. VALIDATE user and plan (e.g., Basic, Pro, Enterprise)
+2. VERIFY payment method is authorized
+3. CREATE subscription record with:
+   └── status = "ACTIVE"
+   └── start_date = now
+   └── end_date   = now + billing_cycle (monthly/annual)
+4. TRIGGER first Payment Service call:
+   └── POST /payments  (initial charge)
+5. RETURN subscription details
+State transition: NONE → ACTIVE
+
+PATCH /subscriptions/{id}/upgrade — Upgrade Plan
+Algorithm:
+
+vbnet
+Algorithm: UpgradeSubscription(id, new_plan)
+
+1. LOAD existing subscription
+2. VERIFY current status = ACTIVE (can't upgrade a cancelled one)
+3. CHECK new_plan is higher tier than current
+4. CALCULATE prorated charge:
+   └── (remaining_days / total_days) × plan_price_difference
+5. TRIGGER Payment Service for the prorated amount
+6. UPDATE subscription:
+   └── plan = new_plan
+   └── restart billing cycle
+7. RETURN updated subscription
+State transition: ACTIVE → ACTIVE (but with upgraded plan)
+
+POST /subscriptions/{id}/cancel — Cancel Subscription
+Algorithm:
+
+vbnet
+Algorithm: CancelSubscription(id)
+
+1. LOAD subscription
+2. VERIFY it's active (not already cancelled)
+3. CHOOSE cancellation strategy:
+   ├── IMMEDIATE → status = "CANCELLED" now
+   └── END-OF-PERIOD → keep ACTIVE until end_date, then CANCELLED
+4. RELEASE resources (feature access)
+5. (Optionally) arrange refund via Payment Service
+6. RETURN cancellation confirmation
+State transition: ACTIVE → CANCELLED
+
+Subscription State Machine (lifecycle)
+scss
+                POST /subscriptions
+        ┌──────────────────────────────┐
+        ▼                              │
+   [ CREATED ] ──→ [ ACTIVE ] ──→ [ CANCELLED ]
+                     │   ▲               ▲
+                     │   │               │
+                     │   └── upgrade     │
+                     │  (plan change)    │
+                     ▼                   │
+               [ EXPIRED ] ──────────────┘
+              (end_date reached)
+Service 3: Billing Service (Python)
+This service creates and retrieves invoices — it produces the bills that the Payment Service ultimately charges.
+
+POST /invoices/generate — Create an Invoice
+Algorithm:
+
+ini
+Algorithm: GenerateInvoice(customer_id, subscription_id, period)
+
+1. LOAD subscription details (from Subscription Service or DB)
+2. GATHER line items:
+   ├── base plan price
+   ├── add-ons/usage charges
+   └── prorated amounts (if mid-cycle changes)
+3. CALCULATE taxes:
+   └── rate = tax.get_tax_rate(country, region)
+   └── tax  = round(subtotal × rate, 2)
+4. COMPUTE totals:
+   ├── subtotal  = Σ(line items)
+   ├── total     = subtotal + tax
+   └── store rate + tax breakdown on invoice
+5. ASSIGN invoice number & UUID
+6. SET status = "UNPAID"
+7. PERSIST invoice to DB
+8. RETURN invoice object
+Sample generated invoice:
+
+ini
+subtotal  = $100.00
+tax (8%)  =   $8.00
+total     = $108.00
+status    = UNPAID
+GET /invoices/{id} — Fetch an Invoice
+Algorithm:
+
+kotlin
+Algorithm: GetInvoice(id)
+
+1. LOOKUP invoice by id in database
+2. IF not found → return 404 (Not Found)
+3. ELSE → return full invoice document
+   └── (customer, items, subtotal, tax, total, status)
+Typical response:
+
+json
+{
+  "invoice_id": "uuid",
+  "customer_id": "uuid",
+  "items": [
+    {"description": "Pro Plan (monthly)", "amount": 10000}
+  ],
+  "subtotal": 10000,
+  "tax_rate": 0.08,
+  "tax_amount": 800,
+  "total": 10800,
+  "currency": "USD",
+  "status": "UNPAID",
+  "due_date": "2026-09-10"
+}
+End-to-End Cross-Service Flow
+Here's how all three services cooperate in a real billing scenario:
+
+java
+┌──────────────────────────────────────────────────────────────────┐
+│                                                                  │
+│  1. User signs up for "Pro" plan                                 │
+│                                                                  │
+│  ┌──────────────────────────────────────────┐                    │
+│  │ Subscription Service (Java)              │                    │
+│  │  POST /subscriptions                     │                    │
+│  │  → Creates ACTIVE subscription           │                    │
+│  └──────────────┬───────────────────────────┘                    │
+│                 │                                               │
+│  ┌──────────────▼───────────────────────────┐                    │
+│  │ Billing Service (Python)                 │                    │
+│  │  POST /invoices/generate                 │                    │
+│  │  → Builds invoice with tax               │                    │
+│  └──────────────┬───────────────────────────┘                    │
+│                 │                                               │
+│  ┌──────────────▼───────────────────────────┐                    │
+│  │ Payment Service (Go)                     │                    │
+│  │  POST /payments                          │                    │
+│  │  → Charges customer (idempotent)         │                    │
+│  │  → Returns payment_id                    │                    │
+│  └──────────────┬───────────────────────────┘                    │
+│                 │                                               │
+│  ┌──────────────▼───────────────────────────┐                    │
+│  │ Mark invoice as PAID                     │                    │
+│  └──────────────────────────────────────────┘                    │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘
+Data Flow Summary
+Step	Service	Action
+1	Java (Subscription)	User subscribes → ACTIVE plan
+2	Python (Billing)	Invoice generated (amount + tax)
+3	Go (Payment)	Money collected (idempotent charge)
+4	All	Statuses updated (invoice → PAID)
