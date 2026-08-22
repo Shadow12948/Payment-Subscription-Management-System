@@ -60,3 +60,79 @@ Response:
 }
 
 Saved in DB
+Idempotency Middleware — Detailed Explanation
+This is a clean, functional implementation of the idempotency guard. Let me dissect it line by line, explain the flow, and — importantly — point out some production concerns that this simplified version hints at.
+
+What This Middleware Does (In One Sentence)
+"If a request with this Idempotency-Key has been seen before, replay the saved response instead of processing the payment again."
+
+This prevents a double charge when a client retries after a network timeout or crash.
+
+ Full Walkthrough
+The Function Signature
+go
+func Idempotency(db *sql.DB, next http.Handler) http.Handler
+Takes the database connection (db *sql.DB) and the next handler in the chain
+Returns a new http.Handler that wraps the original one
+This is the middleware pattern — it intercepts the request before passing it down the chain
+Step 1 — Extract and Validate the Key
+go
+key := r.Header.Get("Idempotency-Key")
+if key == "" {
+    http.Error(w, "Missing Idempotency-Key", http.StatusBadRequest)
+    return
+}
+What happens: Read the Idempotency-Key header.
+
+If it's absent → reject with 400 Bad Request immediately. No payment logic runs.
+If present → proceed.
+Why this is required: Every payment request must carry an idempotency key. Rejecting requests without one is a deliberate design decision — it forces all clients to participate in the idempotency contract.
+
+Step 2 — Query the Database for an Existing Key
+go
+var response []byte
+err := db.QueryRow("SELECT response FROM idempotency_keys WHERE key=$1", key).Scan(&response)
+What happens: Look up the key in the idempotency_keys table. If a row exists, retrieve the previously-stored response body.
+
+Step 3 — Replay Path (Key already exists)
+go
+if err == nil {
+    w.Header().Set("Content-Type", "application/json")
+    w.Write(response)
+    return
+}
+This is the "no double charge" branch.
+
+Situation	Behavior
+err == nil	Row found → replay the stored response
+err == sql.ErrNoRows	Key is new → fall through and process
+err is something else	(e.g., DB outage) → problem, see concerns below
+The stored response is written back verbatim. The client gets the exact same result as the original request — so from the client's perspective, a retry is indistinguishable from the first attempt.
+
+Step 4 — Processing Path (New key — first occurrence)
+go
+rw := &responseWriter{ResponseWriter: w}
+next.ServeHTTP(rw, r)
+Here's the clever part. It wraps the real ResponseWriter in a custom responseWriter so the downstream handler's output can be captured before it's stored.
+
+next.ServeHTTP(rw, r) — passes the request (and the wrapped writer) down to the actual payment handler.
+The handler writes its response to rw, which snapshots the body (see the responseWriter type below).
+Step 5 — Store the Response Keyed by Idempotency Key
+go
+respBytes, _ := json.Marshal(rw.body)
+_, _ = db.Exec("INSERT INTO idempotency_keys(key, response) VALUES($1, $2)", key, respBytes)
+Convert the captured response body to JSON bytes.
+INSERT a new row: key → response.
+Next time this key appears, Step 3 will find it and replay.
+The Helper Type: responseWriter
+go
+type responseWriter struct {
+    http.ResponseWriter   // embeds the original writer (satisfies the interface)
+    body interface{}      // captures the JSON response
+}
+
+func (rw *responseWriter) Write(b []byte) (int, error) {
+    json.Unmarshal(b, &rw.body)   // capture JSON into body
+    return rw.ResponseWriter.Write(b)  // ALSO forward to the real client
+}
+The magic: By embedding http.ResponseWriter, this struct automatically satisfies the interface — so it can be passed to any handler expecting
