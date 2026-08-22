@@ -261,4 +261,47 @@ Domain Models	models.py	Data structures and validation
 Persistence	db.py	Database connectivity
 Config	requirements.txt + Dockerfile	Packaging & deployment
 This follows a clean layered architecture — separation of concerns where each file has a single, focused responsibility.
+Go Payment Service — Complete Explanation
+You've laid out an excellent, production-oriented Go structure. Let me walk through each file, its purpose, the algorithm it implements, and the key engineering decisions — including concrete code.
+ Layer 2: middleware/idempotency.go — The Critical Guard
+Purpose
+This is the first line of defense against double charges. It sits before the handler and intercepts every request.
+
+The Idempotency Algorithm (in detail)
+go
+package middleware  
+
+import (  
+    "net/http"  
+    "payment-service/internal/db"   // for the idempotency store  
+)  
+
+type IdempotencyMiddleware struct {  
+    store  *db.IdempotencyStore  // stores request → response mappings  
+}  
+
+func (m *IdempotencyMiddleware) Wrap(next http.HandlerFunc) http.HandlerFunc {  
+    return func(w http.ResponseWriter, r *http.Request) {  
+        key := r.Header.Get("Idempotency-Key")  
+        if key == "" {  
+            http.Error(w, "missing Idempotency-Key header", http.StatusBadRequest)  
+            return  
+        }  
+
+        // ── STEP 1: Look up the key ─────────────────────────  
+        // If found → the EXACT same request was already processed.  
+        // Return the CACHED response instead of processing again.  
+        if cached, found := m.store.Get(key); found {  
+            writeResponse(w, cached)  // replay original result  
+            return  
+        }  
+
+        // ── STEP 2: Not seen before → process normally ──────  
+        // Wrap the ResponseWriter to capture the response so we  
+        // can store it keyed by the idempotency key.  
+        recorder := newResponseRecorder(w)  
+        next(recorder, r)  
+
+        // ── STEP 3: Store the response for future retries ───  
+        m.store.Put(key, recorder.GetResult
 
