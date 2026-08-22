@@ -227,3 +227,125 @@ Step	Service	Action
 2	Python (Billing)	Invoice generated (amount + tax)
 3	Go (Payment)	Money collected (idempotent charge)
 4	All	Statuses updated (invoice → PAID)
+Complete Payment Microservices Architecture — Deep Dive Explanation
+This is a well-structured three-service payment system with clear separation of concerns. Let me break down each component, the design reasoning, and the critical engineering decisions.
+
+🏗️ The Big Picture
+scss
+┌──────────────────┐     ┌──────────────────┐     ┌──────────────────┐
+│  Payment Service  │     │ Subscription      │     │  Billing Service  │
+│     (Go)          │     │ Service (Java)    │     │    (Python)       │
+│  - Processes      │     │ - Manages plans   │     │ - Generates       │
+│    payments       │     │ - Lifecycle       │     │   invoices        │
+└──────────────────┘     └──────────────────┘     └──────────────────┘
+The philosophy: Each service owns exactly one domain. They only communicate via well-defined HTTP contracts. This gives you independent deployability, isolated failure domains, and the ability to scale each service based on its own load profile.
+
+Why polyglot?
+
+Service	Language	Why
+Payment	Go	High concurrency, low latency, excellent for handling financial throughput with many parallel requests
+Subscription	Java	Strong typing suits complex state machines; mature ecosystem (Spring) for lifecycle/transaction management
+Billing	Python	Fast iteration, great for flexible computation of taxes, line items, and prorations
+💳 Service 1: Payment Service (Go)
+Role: Money Movement
+This is the only service authorized to move money. Everything else coordinates; this executes.
+
+The Idempotency Pattern (The Heart of This Service)
+vbnet
+Algorithm: ProcessPayment(invoice_id, amount, currency, idempotency_key)
+
+1. CHECK idempotency-key in database
+   ├── If key ALREADY EXISTS → return the SAME previous result
+   └── If key is NEW → continue
+
+2. VALIDATE: invoice exists, amount > 0, currency supported
+
+3. PROCESS payment (mock gateway) → payment_id, status="success"
+
+4. STORE transaction + idempotency_key in DB
+
+5. RETURN { payment_id, status }
+Why this is so important:
+
+Clients retry on network timeouts. Without idempotency, a single user action could trigger multiple charges.
+The key implementation detail: the idempotency key must be stored atomically with the payment record, typically enforced with a unique database constraint. This makes the "check then insert" race-condition-proof.
+⚠️ Pro-tip for correctness: A plain SELECT-then-INSERT is not sufficient under concurrency. The unique constraint on idempotency_key is what actually guarantees "no double charge."
+
+Example Go handler (conceptually):
+go
+func ProcessPayment(w http.ResponseWriter, r *http.Request) {
+    idemKey := r.Header.Get("Idempotency-Key")
+    
+    // 1. Safe idempotency check using DB unique constraint
+    existing := db.CheckIdempotency(idemKey)  // returns nil if new
+    if existing != nil {
+        json.NewEncoder(w).Encode(existing)  // return cached result
+        return
+    }
+
+    // 2-4. Validate, process, store (store with unique key)
+    payment := processAndStore(payload, idemKey)
+
+    // 5
+    json.NewEncoder(w).Encode(payment)
+}
+📦 Service 2: Subscription Service (Java)
+Role: Lifecycle Management
+This service decides when customers are billed and at what rate — it's the "brain" that governs entitlement.
+
+The State Machine — Your Contract
+scss
+        POST /subscriptions
+┌──────────────────────────────┐
+▼                              │
+[ CREATED ] ──→ [ ACTIVE ] ──→ [ CANCELLED ]
+                 │   ▲               ▲
+                 │   │               │
+                 │   └── upgrade     │
+                 │  (plan change)    │
+                 ▼                   │
+           [ EXPIRED ] ──────────────┘
+          (end_date reached)
+Every endpoint is a legal state transition with guard conditions:
+
+Endpoint	Transition	Guard
+POST /subscriptions	NONE → ACTIVE	valid user/plan, authorized payment method
+PATCH .../upgrade	ACTIVE → ACTIVE	must be ACTIVE, new plan must be higher tier
+POST .../cancel	ACTIVE → CANCELLED	must not already be cancelled
+Upgrade with Proration (the tricky math)
+ini
+prorated_charge = (remaining_days / total_days) × (new_price − old_price)
+Why proration matters: If a user upgrades on day 20 of a 30-day cycle, they shouldn't pay the full price difference — only for the 10 remaining days of the current cycle. After upgrading, the billing cycle restarts so future invoices align cleanly.
+
+Cancellation Strategies
+Strategy	Meaning
+IMMEDIATE	Features revoked now; status → CANCELLED immediately
+END-OF-PERIOD	User keeps access until end_date (already paid for), then status → CANCELLED
+This is a classic retention-friendly tradeoff: you honor what the customer paid for, then cut off access.
+
+🧾 Service 3: Billing Service (Python)
+Role: Invoice Production
+This service constructs the bill that Payment later executes against — it separates "what to charge" from "actually charging."
+
+The Invoice Generation Pipeline
+ini
+1. LOAD subscription (plan, cycle, customer)
+2. GATHER line items:
+   ├── base plan price
+   ├── add-ons / usage charges
+   └── prorated amounts (mid-cycle changes)
+3. CALCULATE tax:
+   └── rate = tax.get_tax_rate(country, region)   → 8%
+   └── tax  = round(subtotal × rate, 2)           → $8.00
+4. COMPUTE totals: subtotal = Σ(items); total = subtotal + tax
+5. ASSIGN invoice number + UUID
+6. SET status = "UNPAID"
+7. PERSIST and RETURN
+Key Separation: Billing vs. Tax
+Note the architectural choice: Billing computes your charges, while tax is delegated to a separate mechanism (tax.get_tax_rate()). This hints at integrating a tax engine (e.g., VAT/GST/sales-tax providers) whose logic is jurisdiction-dependent and best isolated.
+
+Sample Outcome
+json
+{  
+  "invoice_id": "uuid",  
+  "subtotal": 
