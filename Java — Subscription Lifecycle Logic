@@ -57,3 +57,5 @@ Update subscription
 Save database
         |
 Return updated subscription
+Java Subscription Service — Complete Code Explanation
+This is a well-written Spring Boot service handling the two core subscription operations: upgrade and cancel. Let me break down every aspect — the annotations, the money math, and the design decisions.
